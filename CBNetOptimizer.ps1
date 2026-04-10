@@ -1,4 +1,3 @@
-#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
     Optimizes your network connection for Combat Box (IL-2 Sturmovik).
@@ -16,22 +15,42 @@
     License: MIT
 #>
 
-# ─── Configuration ────────────────────────────────────────────────────────────
-$CombatBoxHost   = "srs.combatbox.net"
-$IPHeaderOverhead = 28          # 20 bytes IP + 8 bytes ICMP
-$PingTimeout      = 2000        # ms per ping attempt
-$StartSize        = 1472        # = MTU 1500 minus header overhead
-$StepDown         = 10          # decrease payload by this many bytes each try
-$MinSize          = 1200        # don't go below MTU 1228 — something else is wrong
+# --- Self-elevation ----------------------------------------------------------
+$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isAdmin) {
+    $scriptPath = if ($PSCommandPath) { $PSCommandPath } else { $MyInvocation.MyCommand.Path }
+    if (-not $scriptPath) {
+        Write-Host "Cannot determine script path. Please right-click and choose Run with PowerShell." -ForegroundColor Red
+        Read-Host "Press Enter to exit"
+        exit 1
+    }
+    try {
+        Start-Process PowerShell -Verb RunAs -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $scriptPath) -ErrorAction Stop
+    }
+    catch {
+        Write-Host "Failed to elevate: $_" -ForegroundColor Red
+        Read-Host "Press Enter to exit"
+        exit 1
+    }
+    exit
+}
 
-# ─── Helper: coloured output ──────────────────────────────────────────────────
-function Write-Step  { param($Msg) Write-Host "`n>> $Msg" -ForegroundColor Cyan }
-function Write-OK    { param($Msg) Write-Host "   [OK] $Msg" -ForegroundColor Green }
-function Write-Info  { param($Msg) Write-Host "   $Msg" -ForegroundColor Gray }
-function Write-Warn  { param($Msg) Write-Host "   [!] $Msg" -ForegroundColor Yellow }
-function Write-Fail  { param($Msg) Write-Host "   [X] $Msg" -ForegroundColor Red }
+# --- Configuration -----------------------------------------------------------
+$CombatBoxHost    = "srs.combatbox.net"
+$IPHeaderOverhead = 28
+$PingTimeout      = 2000
+$StartSize        = 1472
+$StepDown         = 10
+$MinSize          = 1200
 
-# ─── Banner ───────────────────────────────────────────────────────────────────
+# --- Helper functions --------------------------------------------------------
+function Write-Step { param($Msg) Write-Host "`n>> $Msg" -ForegroundColor Cyan }
+function Write-OK   { param($Msg) Write-Host "   [OK] $Msg" -ForegroundColor Green }
+function Write-Info { param($Msg) Write-Host "   $Msg" -ForegroundColor Gray }
+function Write-Warn { param($Msg) Write-Host "   [!] $Msg" -ForegroundColor Yellow }
+function Write-Fail { param($Msg) Write-Host "   [X] $Msg" -ForegroundColor Red }
+
+# --- Banner ------------------------------------------------------------------
 Clear-Host
 Write-Host ""
 Write-Host "  =============================================" -ForegroundColor Cyan
@@ -40,9 +59,8 @@ Write-Host "   Server: $CombatBoxHost" -ForegroundColor Gray
 Write-Host "  =============================================" -ForegroundColor Cyan
 Write-Host ""
 
-# ─── 1. Resolve the Combat Box server ────────────────────────────────────────
+# --- 1. Resolve server -------------------------------------------------------
 Write-Step "Resolving $CombatBoxHost..."
-
 try {
     $dns = Resolve-DnsName -Name $CombatBoxHost -Type A -ErrorAction Stop
     $serverIP = ($dns | Where-Object { $_.QueryType -eq "A" } | Select-Object -First 1).IPAddress
@@ -56,7 +74,7 @@ catch {
     exit 1
 }
 
-# ─── 2. Select network adapter ───────────────────────────────────────────────
+# --- 2. Select network adapter -----------------------------------------------
 Write-Step "Finding active network adapters..."
 
 $adapters = @(Get-NetAdapter |
@@ -69,7 +87,7 @@ if ($adapters.Count -eq 0) {
 }
 
 if ($adapters.Count -eq 0) {
-    Write-Fail "No active network adapters found at all."
+    Write-Fail "No active network adapters found."
     Read-Host "Press Enter to exit"
     exit 1
 }
@@ -80,31 +98,29 @@ if ($adapters.Count -eq 1) {
 }
 else {
     Write-Host ""
-    Write-Host "   Multiple active adapters found. Select your INTERNET connection:" -ForegroundColor Yellow
+    Write-Host "   Multiple adapters found. Select your INTERNET connection:" -ForegroundColor Yellow
     Write-Host ""
     for ($i = 0; $i -lt $adapters.Count; $i++) {
         $a = $adapters[$i]
-        Write-Host "     [$($i + 1)] $($a.Name)  —  $($a.InterfaceDescription)  ($($a.LinkSpeed))" -ForegroundColor White
+        Write-Host "     [$($i + 1)] $($a.Name) - $($a.InterfaceDescription) ($($a.LinkSpeed))" -ForegroundColor White
     }
     Write-Host ""
     do {
         $choice = Read-Host "   Enter number (1-$($adapters.Count))"
         $choiceNum = [int]$choice - 1
     } while ($choiceNum -lt 0 -or $choiceNum -ge $adapters.Count)
-
     $adapter = $adapters[$choiceNum]
     Write-OK "Selected: $($adapter.Name) ($($adapter.InterfaceDescription))"
 }
 
-$adapterName  = $adapter.Name
-$adapterIndex = $adapter.ifIndex
-$adapterDesc  = $adapter.InterfaceDescription
+$adapterName = $adapter.Name
+$adapterDesc = $adapter.InterfaceDescription
 
-# Read current MTU via netsh — the most reliable method across all adapter types
+# --- Read current MTU via netsh ----------------------------------------------
 $currentMTU = $null
 $subInterfaces = netsh interface ipv4 show subinterfaces
 foreach ($line in $subInterfaces) {
-    if ($line -match $adapterName) {
+    if ($line -match [regex]::Escape($adapterName)) {
         if ($line -match "^\s*(\d+)") {
             $currentMTU = [int]$Matches[1]
         }
@@ -113,70 +129,56 @@ foreach ($line in $subInterfaces) {
 }
 if (-not $currentMTU) {
     $currentMTU = 1500
-    Write-Warn "Could not read current MTU — assuming default 1500."
+    Write-Warn "Could not read current MTU - assuming default 1500."
 }
 
 Write-OK "Adapter:     $adapterName ($adapterDesc)"
 Write-Info "Current MTU: $currentMTU"
 
-# ─── 3. Path MTU Discovery ───────────────────────────────────────────────────
+# --- 3. Path MTU Discovery ---------------------------------------------------
 Write-Step "Finding optimal MTU to $serverIP (this takes a moment)..."
-Write-Info "Sending pings with Don't Fragment flag, working down from $StartSize bytes..."
+Write-Info "Pinging with Don't Fragment flag, stepping down from $StartSize bytes..."
 
 $optimalPayload = $null
 $testSize = $StartSize
 
 while ($testSize -ge $MinSize) {
     $result = ping -n 1 -f -l $testSize -w $PingTimeout $serverIP 2>&1
-
-    # Check if the ping succeeded (Reply from...)
     $success = $result | Select-String -Pattern "Reply from" -Quiet
-
     if ($success) {
         $optimalPayload = $testSize
-        Write-OK "Payload $testSize bytes — OK (MTU = $($testSize + $IPHeaderOverhead))"
+        Write-OK "Payload $testSize bytes - OK (MTU = $($testSize + $IPHeaderOverhead))"
         break
     }
     else {
-        Write-Info "Payload $testSize bytes — fragmented or timed out"
+        Write-Info "Payload $testSize bytes - fragmented or timed out"
         $testSize -= $StepDown
     }
 }
 
 if (-not $optimalPayload) {
-    Write-Fail "Could not determine path MTU. The server may be blocking ICMP."
-    Write-Warn "Falling back to the Combat Box recommended value of MTU 1300."
+    Write-Fail "Could not determine path MTU. Server may be blocking ICMP."
+    Write-Warn "Falling back to Combat Box recommended MTU of 1300."
     $optimalMTU = 1300
 }
 else {
-    # Fine-tune: step back up in increments of 1 to find exact boundary
     Write-Info ""
-    Write-Info "Fine-tuning (stepping up by 1 byte to find the exact limit)..."
-
-    $fineSize = $optimalPayload + $StepDown  # go back to the last failing size
+    Write-Info "Fine-tuning to exact byte boundary..."
+    $fineSize    = $optimalPayload + $StepDown
     $bestPayload = $optimalPayload
-
     for ($s = $optimalPayload + 1; $s -le $fineSize; $s++) {
-        $result = ping -n 1 -f -l $s -w $PingTimeout $serverIP 2>&1
+        $result  = ping -n 1 -f -l $s -w $PingTimeout $serverIP 2>&1
         $success = $result | Select-String -Pattern "Reply from" -Quiet
-
-        if ($success) {
-            $bestPayload = $s
-        }
-        else {
-            break
-        }
+        if ($success) { $bestPayload = $s } else { break }
     }
-
     $optimalMTU = $bestPayload + $IPHeaderOverhead
-    Write-OK "Optimal MTU: $optimalMTU (largest payload: $bestPayload + $IPHeaderOverhead header)"
+    Write-OK "Optimal MTU: $optimalMTU (payload $bestPayload + $IPHeaderOverhead header bytes)"
 }
 
-# ─── 4. Apply MTU ────────────────────────────────────────────────────────────
+# --- 4. Apply MTU ------------------------------------------------------------
 Write-Step "Applying MTU $optimalMTU to adapter '$adapterName'..."
-
 if ($currentMTU -eq $optimalMTU) {
-    Write-OK "MTU is already set to $optimalMTU — no change needed."
+    Write-OK "MTU is already $optimalMTU - no change needed."
 }
 else {
     try {
@@ -188,18 +190,15 @@ else {
     }
 }
 
-# ─── 5. Disable TCP Auto-Tuning ─────────────────────────────────────────────
-Write-Step "Disabling TCP Auto-Tuning (reduces latency spikes in games)..."
-
+# --- 5. Disable TCP Auto-Tuning ----------------------------------------------
+Write-Step "Disabling TCP Auto-Tuning..."
 $autoTuning = (netsh interface tcp show global) | Select-String "Receive Window Auto-Tuning Level"
 Write-Info "Current: $($autoTuning.ToString().Trim())"
-
 netsh interface tcp set global autotuninglevel=disabled | Out-Null
 Write-OK "TCP Auto-Tuning disabled."
 
-# ─── 6. Offer DNS change ────────────────────────────────────────────────────
+# --- 6. DNS ------------------------------------------------------------------
 Write-Step "DNS optimisation"
-
 $dnsOutput = netsh interface ip show dns "$adapterName"
 Write-Info "Current DNS config:"
 foreach ($dnsLine in $dnsOutput) {
@@ -208,7 +207,6 @@ foreach ($dnsLine in $dnsOutput) {
 }
 
 $changeDNS = Read-Host "   Set DNS to Cloudflare (1.1.1.1) + Google (8.8.8.8)? [Y/n]"
-
 if ($changeDNS -ne "n" -and $changeDNS -ne "N") {
     try {
         netsh interface ip set dns "$adapterName" static 1.1.1.1 | Out-Null
@@ -223,21 +221,28 @@ else {
     Write-Info "DNS left unchanged."
 }
 
-# ─── 7. Summary ──────────────────────────────────────────────────────────────
+# --- 7. Summary --------------------------------------------------------------
 Write-Host ""
 Write-Host "  =============================================" -ForegroundColor Green
 Write-Host "   Done! Summary:" -ForegroundColor White
 Write-Host "  =============================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "   Server:          $CombatBoxHost ($serverIP)" -ForegroundColor White
-Write-Host "   Adapter:         $adapterName" -ForegroundColor White
-Write-Host "   MTU:             $currentMTU -> $optimalMTU" -ForegroundColor White
-Write-Host "   Auto-Tuning:     Disabled" -ForegroundColor White
-$finalDNS = netsh interface ip show dns "$adapterName" | Select-String "\d+\.\d+\.\d+\.\d+"
-$dnsDisplay = if ($finalDNS) { ($finalDNS -replace '.*?(\d+\.\d+\.\d+\.\d+).*','$1') -join ', ' } else { "(unchanged)" }
-Write-Host "   DNS:             $dnsDisplay" -ForegroundColor White
+Write-Host "   Server:       $CombatBoxHost ($serverIP)" -ForegroundColor White
+Write-Host "   Adapter:      $adapterName" -ForegroundColor White
+Write-Host "   MTU:          $currentMTU -> $optimalMTU" -ForegroundColor White
+Write-Host "   Auto-Tuning:  Disabled" -ForegroundColor White
+
+$dnsIPs = @()
+foreach ($line in (netsh interface ip show dns "$adapterName")) {
+    if ($line -match "(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})") {
+        $dnsIPs += $Matches[1]
+    }
+}
+$dnsDisplay = if ($dnsIPs.Count -gt 0) { $dnsIPs -join ", " } else { "unchanged" }
+Write-Host "   DNS:          $dnsDisplay" -ForegroundColor White
+
 Write-Host ""
 Write-Warn "No reboot required. Changes take effect immediately."
-Write-Warn "To revert MTU to default later: netsh interface ipv4 set subinterface `"$adapterName`" mtu=1500 store=persistent"
+Write-Warn "To revert MTU: netsh interface ipv4 set subinterface `"$adapterName`" mtu=1500 store=persistent"
 Write-Host ""
 Read-Host "Press Enter to exit"
