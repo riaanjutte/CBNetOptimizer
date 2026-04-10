@@ -18,25 +18,17 @@ The script:
 ## Requirements
 
 - Windows 10 or 11
-- PowerShell (built into Windows)
-- Administrator privileges
+- No installs required — uses only built-in Windows tools
 
 ## Usage
 
-1. Download `CBNetOptimizer.ps1`
-2. Right-click the file and select **Run with PowerShell** (as Administrator)
+1. Download both `Run-CBNetOptimizer.bat` and `CBNetOptimizer.ps1` into the same folder
+2. Double-click **`Run-CBNetOptimizer.bat`**
+3. Accept the Windows UAC prompt when asked
 
-If PowerShell blocks the script with an execution policy error, run this first in an admin PowerShell window:
+That's it. The `.bat` file handles elevation and execution policy automatically — no need to right-click or open PowerShell manually.
 
-```powershell
-Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
-```
-
-Then run the script:
-
-```powershell
-.\CBNetOptimizer.ps1
-```
+> **Note:** Both files must be in the same folder for the launcher to work.
 
 ## What to Expect
 

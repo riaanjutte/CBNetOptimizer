@@ -206,6 +206,13 @@ foreach ($dnsLine in $dnsOutput) {
     if ($trimmed) { Write-Info "  $trimmed" }
 }
 
+Write-Host ""
+Write-Host "   Your DNS server is what translates website names into IP addresses." -ForegroundColor Gray
+Write-Host "   Your current DNS is usually provided by your ISP and may be slow." -ForegroundColor Gray
+Write-Host "   Cloudflare (1.1.1.1) and Google (8.8.8.8) are free, faster alternatives" -ForegroundColor Gray
+Write-Host "   that can reduce connection delays when joining the Combat Box server." -ForegroundColor Gray
+Write-Host "   This change is safe and can be undone at any time." -ForegroundColor Gray
+Write-Host ""
 $changeDNS = Read-Host "   Set DNS to Cloudflare (1.1.1.1) + Google (8.8.8.8)? [Y/n]"
 if ($changeDNS -ne "n" -and $changeDNS -ne "N") {
     try {
