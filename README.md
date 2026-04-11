@@ -28,10 +28,7 @@ The script:
 3. Accept the Windows UAC prompt when asked
 
 If Windows blocks the script because it was downloaded from the internet, unblock it first:
-
-```powershell
-Unblock-File -Path .\CBNetOptimizer.ps1
-```
+right-click `CBNetOptimizer.ps1` → **Properties** → tick **Unblock** → OK.
 
 ## What to Expect
 
